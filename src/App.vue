@@ -1,23 +1,43 @@
 <template>
   <div class="app">
-    <h1 class="title">시간표 최적화</h1>
+    <h1 class="title">단국대 경영공학과 시간표 최적화</h1>
 
-    <div class="credit-info" :class="{ 'credit-warning': totalCredits > 18 }">
+    <!-- 고정된 선택 인터페이스 -->
+    <div class="selection-bar">
+      <!-- 교양/전공 선택 -->
+      <div class="selection-item">
+        <label>구분:</label>
+        <select v-model="selectedType">
+          <option value="" disabled>선택하세요</option>
+          <option value="LIBERAL_ARTS">교양</option>
+          <option value="MAJOR">전공</option>
+        </select>
+      </div>
+
+      <!-- 검색 버튼 -->
+      <button @click="loadCourses" class="search-button" :disabled="!selectedType">
+        검색
+      </button>
+    </div>
+
+    <!-- 학점 정보 -->
+    <div class="credit-info" :class="{ 'credit-warning': totalCredits > 18 }" v-if="courses.length > 0">
       현재 선택된 학점: {{ totalCredits }}/18
     </div>
 
-    <!-- 초기 화면: 과목 선택 버튼 -->
-    <div v-if="!showCourses" class="center-content">
-      <button @click="toggleCourses" class="main-button">수업 선택하기</button>
+    <!-- 로딩 중 메시지 -->
+    <div v-if="isLoading" class="loading-message">
+      데이터를 불러오는 중입니다...
     </div>
 
-    <!-- 과목 목록 -->
-    <div v-if="showCourses" class="course-section">
-      <div class="section-header">
-        <h2>수강 가능한 과목</h2>
-        <button @click="toggleCourses" class="close-button">접기</button>
-      </div>
+    <!-- 데이터 없음 메시지 -->
+    <div v-if="!isLoading && courses.length === 0 && searched" class="loading-message error-message">
+      데이터가 없습니다. 관리자에게 문의하세요. (데이터 파일에 유효한 데이터가 없음)
+    </div>
 
+    <!-- 수업 목록 -->
+    <div v-if="!isLoading && courses.length > 0" class="course-section">
+      <h2>수강 가능한 과목</h2>
       <div class="course-table">
         <table>
           <thead>
@@ -27,7 +47,6 @@
               <th>교과목번호</th>
               <th>교과목명</th>
               <th>분반</th>
-              <th>원어</th>
               <th>학점</th>
               <th>교강사</th>
               <th>요일/교시/강의실</th>
@@ -41,26 +60,26 @@
               v-for="course in courses"
               :key="course.id"
               :class="{ 'selected-row': course.selected }"
+              @click="toggleSelection(course)"
+              style="cursor: pointer;"
             >
-              <td>{{ course.year }}</td>
+              <td>{{ course.grade }}</td>
               <td>{{ course.courseType }}</td>
-              <td>{{ course.courseNumber }}</td>
+              <td>{{ course.courseId }}</td>
               <td>{{ course.courseName }}</td>
               <td>{{ course.division }}</td>
-              <td>{{ course.language }}</td>
-              <td>{{ course.credits }}</td>
+              <td>{{ course.credits.theory + course.credits.practice }}</td>
               <td>{{ course.professor }}</td>
-              <td>{{ course.schedule }}</td>
-              <td>{{ course.teachingMethod }}</td>
+              <td>{{ formatSchedule(course.schedule) }}</td>
+              <td>{{ course.isOnline ? '온라인' : '오프라인' }}</td>
               <td>{{ course.department }}</td>
               <td>
                 <input
                   type="checkbox"
                   v-model="course.selected"
+                  @click.stop
                   @change="updateSelection(course)"
-                  :disabled="
-                    !course.selected && totalCredits + course.credits > 18
-                  "
+                  :disabled="!course.selected && totalCredits + (course.credits.theory + course.credits.practice) > 18"
                 />
               </td>
             </tr>
@@ -72,16 +91,11 @@
     <!-- 선택된 과목 목록 -->
     <div v-if="selectedCourses.length > 0" class="selected-courses">
       <h2>선택한 과목</h2>
-      <div
-        v-for="course in selectedCourses"
-        :key="course.id"
-        class="selected-course"
-      >
+      <div v-for="course in selectedCourses" :key="course.id" class="selected-course">
         <div class="course-info">
           <span class="course-name">{{ course.courseName }}</span>
           <span class="course-detail">
-            ({{ course.courseType }} | {{ course.credits }}학점 |
-            {{ course.professor }} | {{ course.schedule }})
+            ({{ course.courseType }} | {{ course.credits.theory + course.credits.practice }}학점 | {{ course.professor }} | {{ formatSchedule(course.schedule) }})
           </span>
         </div>
         <div class="weight-select">
@@ -97,6 +111,16 @@
       </div>
     </div>
 
+    <!-- 제출하기 버튼 -->
+    <button
+      v-if="allSelected && selectedCourses.length > 0"
+      @click="submitCourses"
+      class="submit-button"
+    >
+      제출하기
+    </button>
+
+    <!-- 시간표 최적화 버튼 -->
     <button
       v-if="selectedCourses.length > 0"
       @click="optimizeSchedule"
@@ -109,149 +133,16 @@
 </template>
 
 <script>
+import { fetchTimetableData } from './services/timetable';
+
 export default {
-  name: "App",
+  name: 'App',
   data() {
     return {
-      showCourses: false,
-      courses: [
-        {
-          id: 1,
-          year: 1,
-          courseType: "공학기초",
-          courseNumber: "557580",
-          courseName: "4차산업혁명과인공지능",
-          division: "02",
-          language: "한국어",
-          credits: 3,
-          professor: "장영철",
-          schedule: "화2~7(공학406-01)",
-          teachingMethod: "대면",
-          classType: "",
-          department: "과학기술대학 경영공학과",
-          selected: false,
-          weight: 3,
-        },
-        {
-          id: 2,
-          year: 2,
-          courseType: "전공기초",
-          courseNumber: "311200",
-          courseName: "공업수학1",
-          division: "03",
-          language: "한국어",
-          credits: 3,
-          professor: "정현수",
-          schedule: "목9~14(공학513)",
-          teachingMethod: "대면",
-          classType: "",
-          department: "과학기술대학 경영공학과",
-          selected: false,
-          weight: 3,
-        },
-        {
-          id: 3,
-          year: 2,
-          courseType: "전공필수",
-          courseNumber: "301110",
-          courseName: "OR",
-          division: "01",
-          language: "한국어",
-          credits: 3,
-          professor: "조성원",
-          schedule: "화9~11(공학308)\n수9~11(공학308)",
-          teachingMethod: "대면",
-          classType: "",
-          department: "과학기술대학 경영공학과",
-          selected: false,
-          weight: 3,
-        },
-        {
-          id: 4,
-          year: 4,
-          courseType: "전공필수",
-          courseNumber: "534520",
-          courseName: "경영공학종합설계",
-          division: "02",
-          language: "한국어",
-          credits: 2,
-          professor: "조성원",
-          schedule: "목12~15(공학308)",
-          teachingMethod: "대면",
-          classType: "",
-          department: "과학기술대학 경영공학과",
-          selected: false,
-          weight: 3,
-        },
-        {
-          id: 5,
-          year: 3,
-          courseType: "전공선택",
-          courseNumber: "405580",
-          courseName: "제조공학",
-          division: "01",
-          language: "한국어",
-          credits: 3,
-          professor: "임아론",
-          schedule: "목10~15(공학310-01)",
-          teachingMethod: "대면",
-          classType: "",
-          department: "과학기술대학 경영공학과",
-          selected: false,
-          weight: 3,
-        },
-        {
-          id: 6,
-          year: 4,
-          courseType: "전공선택",
-          courseNumber: "561320",
-          courseName: "컴퓨터비전",
-          division: "01",
-          language: "한국어",
-          credits: 2,
-          professor: "임아론",
-          schedule: "수9~12(공학406-01)",
-          teachingMethod: "대면",
-          classType: "",
-          department: "과학기술대학 경영공학과",
-          selected: false,
-          weight: 3,
-        },
-        {
-          id: 7,
-          year: 4,
-          courseType: "전공선택",
-          courseNumber: "421810",
-          courseName: "투자론",
-          division: "05",
-          language: "한국어",
-          credits: 3,
-          professor: "한종수",
-          schedule: "화9~11(공학305)\n수2~4(공학305)",
-          teachingMethod: "대면",
-          classType: "",
-          department: "과학기술대학 경영공학과",
-          selected: false,
-          weight: 3,
-        },
-        {
-          id: 8,
-          year: 4,
-          courseType: "전공선택",
-          courseNumber: "534230",
-          courseName: "회계공학",
-          division: "01",
-          language: "한국어",
-          credits: 3,
-          professor: "",
-          schedule: "목2~7(공학308)",
-          teachingMethod: "대면",
-          classType: "",
-          department: "과학기술대학 경영공학과",
-          selected: false,
-          weight: 3,
-        },
-      ],
+      selectedType: '',
+      courses: [],
+      isLoading: false,
+      searched: false,
     };
   },
   computed: {
@@ -259,40 +150,135 @@ export default {
       return this.courses.filter((course) => course.selected);
     },
     totalCredits() {
-      return this.selectedCourses.reduce(
-        (sum, course) => sum + course.credits,
-        0
-      );
+      return this.selectedCourses.reduce((sum, course) => sum + (course.credits.theory + course.credits.practice), 0);
+    },
+    allSelected() {
+      return this.courses.length > 0 && this.courses.every((course) => course.selected);
     },
   },
   methods: {
-    toggleCourses() {
-      this.showCourses = !this.showCourses;
+    async loadCourses() {
+      if (!this.selectedType) {
+        alert('구분을 선택해주세요.');
+        return;
+      }
+      this.isLoading = true;
+      this.searched = true;
+      try {
+        const { courses } = await fetchTimetableData(
+          '천안', // 캠퍼스 고정
+          this.selectedType
+        );
+        this.courses = courses;
+        console.log('불러온 데이터:', this.courses);
+      } catch (error) {
+        console.error('데이터 로드 실패:', error);
+      } finally {
+        this.isLoading = false;
+      }
+    },
+    toggleSelection(course) {
+      if (!course.selected && this.totalCredits + (course.credits.theory + course.credits.practice) <= 18) {
+        course.selected = !course.selected;
+      } else if (course.selected) {
+        course.selected = !course.selected;
+      }
+      this.updateSelection(course);
     },
     updateSelection(course) {
       if (course.selected && this.totalCredits > 18) {
         course.selected = false;
-        alert("최대 18학점을 초과할 수 없습니다.");
-        return;
+        alert('최대 18학점을 초과할 수 없습니다.');
       }
+    },
+    formatSchedule(schedule) {
+      if (!schedule || schedule.length === 0) return '미정';
+      return schedule.map(s => `${s.day} ${s.start}-${s.end}교시 (${s.room})`).join(', ');
     },
     optimizeSchedule() {
       const selectedData = this.selectedCourses.map((course) => ({
         id: course.id,
-        courseNumber: course.courseNumber,
+        courseId: course.courseId,
         courseName: course.courseName,
         schedule: course.schedule,
-        credits: course.credits,
+        credits: course.credits.theory + course.credits.practice,
         weight: course.weight,
       }));
-
-      console.log("최적화할 과목들:", selectedData);
+      console.log('최적화할 과목들:', selectedData);
+    },
+    async submitCourses() {
+      const submittedData = this.selectedCourses.map((course) => ({
+        id: course.id,
+        courseId: course.courseId,
+        courseName: course.courseName,
+        division: course.division,
+        credits: course.credits.theory + course.credits.practice,
+        professor: course.professor,
+        schedule: course.schedule,
+        department: course.department,
+        weight: course.weight,
+      }));
+      try {
+        const response = await axios.post('http://localhost:3000/api/submit-courses', submittedData);
+        console.log('서버 응답:', response.data);
+        alert('과목이 성공적으로 제출되었습니다!');
+      } catch (error) {
+        console.error('제출 실패:', error);
+        alert('제출 중 오류가 발생했습니다.');
+      }
     },
   },
 };
 </script>
 
 <style>
+.selection-bar {
+  display: flex;
+  gap: 20px;
+  padding: 20px;
+  background-color: #f8f9fa;
+  border-radius: 8px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.selection-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.selection-item label {
+  font-weight: bold;
+}
+
+.selection-item select {
+  padding: 8px;
+  border-radius: 4px;
+  border: 1px solid #ddd;
+  min-width: 200px;
+}
+
+.search-button {
+  padding: 10px 20px;
+  background-color: #3498db;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background-color 0.3s;
+}
+
+.search-button:hover {
+  background-color: #2980b9;
+}
+
+.search-button:disabled {
+  background-color: #a8a8a8;
+  cursor: not-allowed;
+}
+
 .app {
   max-width: 1200px;
   margin: 0 auto;
@@ -304,48 +290,6 @@ export default {
   text-align: center;
   color: #2c3e50;
   margin-bottom: 30px;
-}
-
-.center-content {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  min-height: 300px;
-}
-
-.main-button {
-  padding: 20px 40px;
-  font-size: 24px;
-  background-color: #42b983;
-  color: white;
-  border: none;
-  border-radius: 8px;
-  cursor: pointer;
-  transition: background-color 0.3s;
-}
-
-.main-button:hover {
-  background-color: #3aa876;
-}
-
-.section-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 20px;
-}
-
-.close-button {
-  padding: 8px 16px;
-  background-color: #666;
-  color: white;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-}
-
-.course-section {
-  margin-top: 20px;
 }
 
 .credit-info {
@@ -360,6 +304,22 @@ export default {
 .credit-warning {
   background-color: #fff3f3;
   color: red;
+}
+
+.loading-message {
+  text-align: center;
+  padding: 20px;
+  color: #666;
+  font-size: 16px;
+}
+
+.error-message {
+  color: #e74c3c;
+  font-weight: bold;
+}
+
+.course-section {
+  margin-top: 20px;
 }
 
 .course-table {
@@ -444,6 +404,24 @@ th {
 .optimize-button:disabled {
   background-color: #a8a8a8;
   cursor: not-allowed;
+}
+
+.submit-button {
+  display: block;
+  width: 200px;
+  margin: 20px auto;
+  padding: 15px 30px;
+  background-color: #e74c3c;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 16px;
+  transition: background-color 0.3s;
+}
+
+.submit-button:hover {
+  background-color: #c0392b;
 }
 
 select {
